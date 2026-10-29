@@ -1,0 +1,15 @@
+# Local planning notes (not tracked)
+planning/
+
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+*.egg-info/
+
+# Simulation output
+runs/
