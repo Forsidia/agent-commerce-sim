@@ -6,6 +6,9 @@ make fast **System 1** decisions; sellers make occasional slow **System 2**
 decisions with a hosted LLM. The goal is to study how decision quality, latency
 and cost trade off in agent-to-agent markets.
 
+**Project page:** [forsidia.in/projects/forsidia-market](https://forsidia.in/projects/forsidia-market),
+with screenshots of the 3D market viewer. A video walkthrough is coming soon.
+
 It runs at three levels. Each level needs a bit more set up:
 
 | Mode | Buyers | Sellers | Needs |
