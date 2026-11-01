@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import json
 import sys
+import time
 from pathlib import Path
 
 from acs.config import Settings, SimConfig
@@ -41,8 +42,14 @@ def _llm_seller(settings: Settings):
 def cmd_run(args: argparse.Namespace) -> int:
     settings = Settings.from_env()
     cfg = SimConfig(seed=args.seed, ticks=args.ticks, seller_trigger_every=settings.seller_trigger_every)
-    name = f"seed{args.seed}_{args.buyers}" + ("_llm-sellers" if args.sellers == "llm" else "")
+    # every run gets its own folder, so a re-run never overwrites an earlier one
+    name = args.name or (f"{time.strftime('%Y%m%d-%H%M%S')}_seed{args.seed}_{args.buyers}"
+                         + ("_llm-sellers" if args.sellers == "llm" else ""))
     out = Path(args.out) / name
+    n = 2
+    while not args.name and out.exists():  # two runs started in the same second
+        out = Path(args.out) / f"{name}-{n}"
+        n += 1
     log = RunLog(out)
     buyer_model = _buyer_model(args.buyers, settings)
     llm = _llm_seller(settings) if args.sellers == "llm" else None
@@ -122,6 +129,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--no-positioning", action="store_true", help="with --sellers llm: keep the scenario's prices")
     r.add_argument("--no-shocks", action="store_true", help="disable the scenario's scripted shocks")
     r.add_argument("--out", default="runs")
+    r.add_argument("--name", help="run folder name (default: <timestamp>_seed<N>_<buyers>[_llm-sellers])")
     r.set_defaults(func=cmd_run)
     p = sub.add_parser("replay", help="re-run a recorded run without model calls and verify the event log")
     p.add_argument("run_dir")

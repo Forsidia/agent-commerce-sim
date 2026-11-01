@@ -9,6 +9,7 @@ come from rebuilding the seeded world, which is deterministic.
 from __future__ import annotations
 
 import json
+import time
 from collections import Counter, defaultdict
 from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -22,15 +23,25 @@ STATIC = Path(__file__).parent / "static"
 KEEP = {"txn_ok", "return", "listing", "shock", "shock_end", "seller_action", "positioning"}
 
 
+STALE_S = 120  # an unfinished run with no new tick for this long was stopped
+
+
 def list_runs(root: Path) -> list[dict]:
+    """Newest first. status: done, live (still writing) or stopped (killed before the end)."""
     out = []
     for d in sorted(root.glob("*/config.json"), key=lambda p: p.stat().st_mtime, reverse=True):
         meta = json.loads(d.read_text())
         ticks = d.parent / "ticks.jsonl"
         done = sum(1 for _ in ticks.open()) if ticks.exists() else 0
-        out.append({"name": d.parent.name, "buyers": meta.get("buyers"), "sellers": meta.get("sellers", "rule"),
+        last_write = ticks.stat().st_mtime if ticks.exists() else d.stat().st_mtime
+        if (d.parent / "summary.json").exists():
+            status = "done"
+        else:
+            status = "live" if time.time() - last_write < STALE_S else "stopped"
+        out.append({"name": d.parent.name, "started": int(d.stat().st_mtime * 1000), "seed": meta.get("seed"),
+                    "buyers": meta.get("buyers"), "sellers": meta.get("sellers", "rule"),
                     "seller_model": meta.get("seller_model"), "ticks": meta.get("ticks"), "done": done,
-                    "live": not (d.parent / "summary.json").exists()})
+                    "status": status, "live": status == "live"})
     return out
 
 
@@ -106,7 +117,8 @@ def run_payload(root: Path, name: str, since: int) -> dict:
         row["failed"] = failed[row["tick"]]
         row["defects"] = defects[row["tick"]]
     return {
-        "name": name, "meta": meta, "summary": summary, "live": summary is None,
+        "name": name, "meta": meta, "summary": summary,
+        "live": summary is None and time.time() - (d / "ticks.jsonl").stat().st_mtime < STALE_S,
         **static_world(json.dumps(meta["sim"], sort_keys=True)),
         "ticks": [r for r in ticks if r["tick"] >= since],
         "events": {str(k): v for k, v in sorted(events.items())},

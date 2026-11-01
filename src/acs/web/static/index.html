@@ -19,6 +19,7 @@
   #topbar { top: 12px; left: 12px; right: 12px; display: flex; align-items: center; gap: 10px; padding: 8px 12px; flex-wrap: wrap; }
   #brand { font-weight: 750; letter-spacing: 0.02em; white-space: nowrap; }
   #brand span { color: var(--muted); font-weight: 500; }
+  #runs { max-width: 440px; }
   select, button { background: #1d2538; color: var(--text); border: 1px solid var(--line); border-radius: 8px;
     padding: 6px 10px; font: inherit; cursor: pointer; }
   button:hover, select:hover { border-color: rgba(255,255,255,0.25); }
@@ -104,7 +105,8 @@
 
 <div id="topbar" class="panel">
   <div id="brand">Forsidia <span>agent commerce sim</span></div>
-  <select id="runs" title="Run"></select>
+  <select id="runs" title="Choose a run (newest first)"></select>
+  <button id="newrun" class="on" style="display:none" title="A new run started"></button>
   <span id="livebadge" class="badge">done</span>
   <button id="play" title="Play / pause (Space)">▶</button>
   <select id="speed" title="Playback speed">
@@ -567,10 +569,32 @@ async function loadRuns(selectName) {
   fillRuns(runs);
   if (runs.length) { $("runs").value = selectName && runs.some(r => r.name === selectName) ? selectName : runs[0].name; await loadRun($("runs").value); }
 }
+function runLabel(r) {
+  const d = new Date(r.started), today = new Date().toDateString() === d.toDateString();
+  const when = (today ? "" : d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " ")
+    + d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const sellers = r.sellers === "llm" ? `LLM sellers${r.seller_model ? " (" + r.seller_model.split(":").pop() + ")" : ""}` : "rule sellers";
+  const status = r.status === "live" ? "● live" : r.status === "stopped" ? `stopped at day ${r.done}` : `${r.ticks} days`;
+  return `${when} · ${sellers} · ${r.buyers} buyers · seed ${r.seed} · ${status}`;
+}
+let knownRuns = null, runsSig = "";
 function fillRuns(runs) {
   const sel = $("runs"), cur = sel.value;
-  sel.innerHTML = runs.map(r => `<option value="${r.name}">${r.name}${r.live ? " (live)" : ""}</option>`).join("");
-  if (cur && runs.some(r => r.name === cur)) sel.value = cur;
+  const sig = runs.map(r => r.name + r.status).join("|");
+  if (sig !== runsSig) {  // rebuild only on change, so an open dropdown is not closed under the cursor
+    runsSig = sig;
+    sel.innerHTML = runs.map(r => `<option value="${r.name}" title="${r.name}">${escapeHtml(runLabel(r))}</option>`).join("");
+    if (cur && runs.some(r => r.name === cur)) sel.value = cur;
+  }
+  const names = new Set(runs.map(r => r.name));
+  if (knownRuns) {
+    const fresh = runs.find(r => !knownRuns.has(r.name));
+    if (fresh) {
+      const b = $("newrun");
+      b.textContent = `New run started · watch`; b.dataset.name = fresh.name; b.style.display = "";
+    }
+  }
+  knownRuns = names;
 }
 
 async function loadRun(name) {
@@ -824,6 +848,7 @@ function updateFly(now) {
 
 // ------------------------------------------------------------------ controls
 $("runs").onchange = e => loadRun(e.target.value);
+$("newrun").onclick = e => { const n = e.target.dataset.name; e.target.style.display = "none"; $("runs").value = n; loadRun(n); };
 $("play").onclick = togglePlay;
 $("speed").onchange = e => { speed = +e.target.value; };
 $("slider").oninput = e => jumpTo(+e.target.value);

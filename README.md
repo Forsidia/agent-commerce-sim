@@ -14,46 +14,57 @@ It runs at three levels. Each level needs a bit more set up:
 | API key | utility baseline | Claude Haiku or OpenAI (`--sellers llm`) | an API key, no GPU |
 | Full | Ollama decision model (`--buyers s1`) | LLM | GPU with Ollama ≥ 0.35, plus an API key |
 
-## Install
+## Quick start
 
-Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
+Requires [uv](https://docs.astral.sh/uv/), which installs Python 3.12+ itself if
+needed. Everything goes through `./sim.sh`. It installs dependencies on first
+use, starts the 3D viewer in the background, opens it in your browser, and runs
+the simulation.
 
 ```bash
 git clone https://github.com/Forsidia/agent-commerce-sim.git
 cd agent-commerce-sim
-uv sync --extra dev        # includes the LLM extra; use `uv sync --extra llm` without the test tools
-uv run pytest              # 20 offline tests, no network or GPU
+
+./sim.sh                                # run the sim and watch it (no API key, about 4 s)
+
+export ANTHROPIC_API_KEY=...            # from your shell, never from .env
+./sim.sh llm                            # same, with Claude Haiku sellers
 ```
 
-## 1. Offline
+| Command | What it does |
+|---|---|
+| `./sim.sh` or `./sim.sh run` | rule sellers, utility buyers, 100 days, seed 42 |
+| `./sim.sh llm` | LLM sellers. Uses `ANTHROPIC_API_KEY`, or set `ACS_SELLER_MODEL=openai:gpt-5-mini` and `OPENAI_API_KEY` |
+| `./sim.sh s1` | System 1 buyers from Ollama, plus LLM sellers (GPU workstation) |
+| `./sim.sh view` | only start and open the viewer |
+| `./sim.sh stop` | stop the background viewer |
+| `./sim.sh runs` | list recorded runs, newest first |
+| `./sim.sh replay runs/<folder>` | re-run without model calls and check the result is identical |
+| `./sim.sh test` | 20 offline tests, no network or GPU |
+| `./sim.sh setup` | install or update dependencies |
+
+Options after `run`, `llm` or `s1` are passed to the simulation:
 
 ```bash
-uv run acs run                          # 100 days, utility buyers, rule sellers, seed 42 (about 4 s)
-uv run acs run --seed 7 --ticks 50      # other seed and length
-uv run acs run --buyers fake-s1         # offline stand-in for System 1, exercises the gate and fallback
-uv run acs run --no-shocks              # drop the scripted supply cut at day 50
+./sim.sh run --ticks 50 --seed 7       # other length and seed
+./sim.sh run --no-shocks               # drop the scripted supply cut at day 50
+./sim.sh run --buyers fake-s1          # offline stand-in for System 1 (tests the gate and fallback)
+./sim.sh llm --no-positioning          # LLM for slow decisions only; keep the scenario's prices and quality
 ```
 
-## 2. API key (no GPU)
+Every run is saved to its own folder, `runs/<date-time>_seed<N>_<buyers>[_llm-sellers]/`,
+so re-running never overwrites an earlier run.
+
+`./sim.sh` is a thin wrapper around the `acs` command. If you prefer, run it
+directly: `uv run acs run|serve|replay ...`, and `uv run acs run --help` lists
+the options.
+
+## LLM sellers (API key, no GPU)
 
 Sellers position their product line before day 0 (price and quality for each
 product, return policy and opening ad spend). After that, every 5 days a rule
 screen checks for stockouts, overstock, rating drops, high returns, undercutting
 and shocks. The LLM is called only for the companies it flags.
-
-Export the key in your shell. It is never read from `.env`.
-
-```bash
-export ANTHROPIC_API_KEY=...                 # Claude Haiku is the default seller model
-uv run acs run --sellers llm
-```
-
-To use OpenAI instead:
-
-```bash
-export OPENAI_API_KEY=...
-ACS_SELLER_MODEL=openai:gpt-5-mini uv run acs run --sellers llm
-```
 
 **What to expect:**
 - **Calls:** about 5 for positioning plus up to 5 every 5 days, so roughly 100 calls
@@ -66,31 +77,29 @@ ACS_SELLER_MODEL=openai:gpt-5-mini uv run acs run --sellers llm
 - **Failures:** if a call fails (network, auth, timeout or invalid output), that
   company falls back to the rule seller for that decision. The run keeps going,
   and the decision is logged with `source: fallback`.
-- **Skipping positioning:** `--no-positioning` keeps the scenario's prices and
-  quality and uses the LLM only for the slow decisions.
 
-## 3. Full (GPU, System 1 buyers)
+## System 1 buyers (GPU workstation)
 
 ```bash
-ollama pull tev1:4b                          # Ollama >= 0.35; called via POST /v1/systemone
-uv run acs run --buyers s1 --ticks 10        # smoke test first
-uv run acs run --buyers s1 --sellers llm     # everything
+ollama pull tev1:4b                     # Ollama >= 0.35; called via POST /v1/systemone
+./sim.sh s1 --ticks 10                  # smoke test first
+./sim.sh s1                             # everything
 ```
 
 Other decision models are `nimble-v3:9b-q4_K_M` (non-commercial licence) and
 `d1:3b`. Set the model with `ACS_S1_MODEL`. If the model is unsure, gives an
-invalid answer or errors, the buyer falls back to the utility baseline.
+invalid answer or errors, the buyer falls back to the utility baseline. To run
+System 1 buyers with rule sellers, use `./sim.sh run --buyers s1`.
 
-## Watch it: the 3D market viewer
+## The 3D market viewer
 
-```bash
-uv run acs serve                 # http://127.0.0.1:8765, reads ./runs
-```
-
-Open the URL in a browser. While the server is up, start runs in another
-terminal. Each run appears in the dropdown, and a run that is still going shows
-**live** and is followed tick by tick. That's useful for the slower
-`--sellers llm` and `--buyers s1` runs.
+`./sim.sh` starts the viewer at http://127.0.0.1:8765 and leaves it running, so
+you can start more runs while it's open.
+- **Choosing a run:** the dropdown lists every run, newest first, labelled with
+  its start time, sellers, buyers, seed and status (`● live`, `100 days`, or
+  `stopped at day N`).
+- **New runs:** when one starts, a **New run started · watch** button appears.
+- **Live runs:** followed day by day as they're written.
 
 What the viewer shows:
 - **Shops:** a low-poly supermarket with one striped-awning shop per company.
@@ -131,7 +140,7 @@ internet access.
 
 ## Run output and replay
 
-Each run writes to `runs/seed<N>_<buyers>[_llm-sellers]/`. Event and tick logs
+Each run writes to `runs/<date-time>_seed<N>_<buyers>[_llm-sellers]/`. Event and tick logs
 are appended every tick, which is how the viewer follows live runs.
 
 | File | Contents |
@@ -144,7 +153,7 @@ are appended every tick, which is how the viewer follows live runs.
 | `summary.json` | Totals, failed transactions, profit per company, Gini, LLM token usage. Written last; a run without it is still going |
 
 ```bash
-uv run acs replay runs/seed42_utility_llm-sellers   # re-run from recorded decisions with no model calls; checks the events are identical
+./sim.sh replay runs/20261101-140612_seed42_utility_llm-sellers   # no model calls; checks the events are identical
 ```
 
 Model runs are not deterministic: Haiku does not accept `temperature`. They are
@@ -169,6 +178,8 @@ the shell environment, never from `.env`.
 | `ACS_S1_MODEL` | `tev1:4b` | |
 | `ACS_S1_CONCURRENCY` / `ACS_S1_TIMEOUT_S` | `4` / `30` | |
 | `ACS_S1_CONF_MIN` / `ACS_S1_MARGIN_MIN` | `0.6` / `0.15` | System 1 confidence gate |
+| `ACS_VIEWER_PORT` / `ACS_RUNS_DIR` | `8765` / `runs` | used by `./sim.sh` |
+| `ACS_NO_BROWSER` | unset | `1` stops `./sim.sh` from opening a browser |
 
 ## Architecture
 
