@@ -9,7 +9,15 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from acs.models import BuyerDecision, BuyerRequest, CompanyDashboard, SellerAction, TriggerReport
+from acs.models import (
+    BuyerDecision,
+    BuyerRequest,
+    CompanyBrief,
+    CompanyDashboard,
+    PositioningPlan,
+    SellerAction,
+    TriggerReport,
+)
 
 
 class BuyerModel(Protocol):
@@ -36,3 +44,11 @@ class SellerModel(Protocol):
     async def decide_many(
         self, dashboards: list[CompanyDashboard], reports: list[TriggerReport]
     ) -> list[SellerAction]: ...
+
+
+class PositioningModel(Protocol):
+    """One-off decision before tick 0: price and quality for each product."""
+
+    name: str
+
+    async def position_many(self, briefs: list[CompanyBrief]) -> list[PositioningPlan]: ...

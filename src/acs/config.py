@@ -27,6 +27,9 @@ class SimConfig(BaseModel):
     seller_trigger_every: int = 5
     max_price_step: float = 0.2  # sellers may move a price at most +-20% per decision
     price_band: tuple[float, float] = (0.5, 2.0)  # x base price
+    position_price_mult: tuple[float, float] = (0.5, 2.0)  # x category reference price, at positioning
+    position_quality: tuple[float, float] = (0.3, 0.95)
+    quality_wage_base: float = 0.5  # positioning: wage scales with (base + quality)
 
 
 class Settings(BaseModel):
@@ -39,6 +42,9 @@ class Settings(BaseModel):
     s1_conf_min: float = 0.6
     s1_margin_min: float = 0.15
     seller_trigger_every: int = 5
+    seller_model: str = "anthropic:claude-haiku-5-5"  # any Pydantic AI model string, e.g. openai:gpt-5-mini
+    llm_concurrency: int = 5
+    llm_timeout_s: float = 60.0
 
     @classmethod
     def from_env(cls, env_file: str | Path | None = ".env") -> "Settings":
@@ -52,6 +58,9 @@ class Settings(BaseModel):
             "ACS_S1_CONF_MIN": "s1_conf_min",
             "ACS_S1_MARGIN_MIN": "s1_margin_min",
             "ACS_SELLER_TRIGGER_EVERY": "seller_trigger_every",
+            "ACS_SELLER_MODEL": "seller_model",
+            "ACS_LLM_CONCURRENCY": "llm_concurrency",
+            "ACS_LLM_TIMEOUT_S": "llm_timeout_s",
         }
         return cls(**{field: values[env] for env, field in mapping.items() if values.get(env)})
 
@@ -67,7 +76,7 @@ def _read_env_file(path: str | Path) -> dict[str, str]:
             continue
         key, _, value = line.partition("=")
         key = key.strip()
-        if key == "ANTHROPIC_API_KEY":
+        if key.endswith("_API_KEY"):
             continue  # secrets come from the shell only
         out[key] = value.strip().strip('"').strip("'")
     return out

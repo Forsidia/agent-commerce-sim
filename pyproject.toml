@@ -10,7 +10,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "pydantic-ai-slim[anthropic,openai]>=2.64.0"]
+llm = [
+    "pydantic-ai-slim[anthropic,openai]>=2.64.0",
+]
 
 [project.scripts]
 acs = "acs.cli:main"

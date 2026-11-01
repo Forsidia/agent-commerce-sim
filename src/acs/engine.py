@@ -6,7 +6,7 @@ atomically (all checks first, then all mutations) and never asks a model to
 validate or execute a transaction.
 
 Tick order:
-  shocks -> income -> production -> marketing -> seller phase (every K ticks)
+  [tick 0 only: positioning] -> shocks -> income -> production -> marketing -> seller phase (every K ticks)
   -> needs grow -> defects reveal + ratings -> listings expire
   -> buyer decide phase (all at once, against one snapshot)
   -> settle phase (seeded order, against live state) -> hype -> invariants
@@ -20,7 +20,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 
 from acs.config import SimConfig
-from acs.decisions.base import BuyerModel, SellerModel, TriggerDetector
+from acs.decisions.base import BuyerModel, PositioningModel, SellerModel, TriggerDetector
 from acs.decisions.utility import RuleSeller, RuleTriggerDetector, UtilityBuyer, desire, offer_utility
 from acs.ledger import Ledger
 from acs.models import (
@@ -28,11 +28,15 @@ from acs.models import (
     BuyerDecision,
     BuyerRequest,
     Company,
+    CompanyBrief,
     CompanyDashboard,
+    CompetitorProduct,
     Listing,
     Offer,
+    PositioningPlan,
     Producer,
     Product,
+    ProductBrief,
     ProductStats,
     Purchase,
     ResellCandidate,
@@ -75,6 +79,7 @@ class Simulation:
         buyer_model: BuyerModel | None = None,
         trigger_detector: TriggerDetector | None = None,
         seller_model: SellerModel | None = None,
+        positioning_model: PositioningModel | None = None,
         shocks: list[Shock] | None = None,
         log: RunLog | None = None,
     ):
@@ -83,6 +88,7 @@ class Simulation:
         self.buyer_model = buyer_model or UtilityBuyer()
         self.triggers = trigger_detector or RuleTriggerDetector()
         self.seller_model = seller_model or RuleSeller()
+        self.positioning_model = positioning_model  # None keeps the scenario's product line as built
         self.log = log or RunLog()
         self.tick = 0
         # one RNG per subsystem so adding randomness in one place does not shift another
@@ -403,6 +409,70 @@ class Simulation:
         self.log.event(self.tick, "seller_action", company=c.id, source=a.source, reason=a.reason, applied=applied)
         return applied
 
+    def company_brief(self, c: Company) -> CompanyBrief:
+        products = []
+        for pid in c.product_ids:
+            p = self.w.products[pid]
+            makers = [pr for pr in self.w.producers.values() if pr.product_id == pid]
+            rates = [b.need_rates.get(p.category, 0.0) for b in self.w.buyers.values()]
+            rivals = [CompetitorProduct(company_id=o.company_id, company_name=self.w.companies[o.company_id].name,
+                                        price=o.price)
+                      for o in self.w.products.values() if o.category == p.category and o.company_id != c.id]
+            products.append(ProductBrief(
+                product_id=pid, category=p.category, ref_price=self.w.ref_prices[p.category], price=p.price,
+                quality_mean=p.quality_mean, capacity_per_tick=sum(pr.capacity for pr in makers),
+                wage_per_tick=sum(pr.wage for pr in makers),
+                need_growth=round(sum(rates) / max(len(rates), 1), 5), competitors=rivals,
+            ))
+        cash = sorted(self.w.ledger.balance(b.account) for b in self.w.buyers.values())
+        return CompanyBrief(
+            company_id=c.id, name=c.name, cash=self.w.ledger.balance(c.account), products=products,
+            buyers_by_tier=dict(sorted(Counter(b.wealth_tier for b in self.w.buyers.values()).items())),
+            median_buyer_cash=cash[len(cash) // 2] if cash else 0,
+            price_mult_range=self.cfg.position_price_mult, quality_range=self.cfg.position_quality,
+            quality_wage_base=self.cfg.quality_wage_base,
+        )
+
+    async def _positioning_phase(self) -> None:
+        briefs = [self.company_brief(c) for c in self.w.companies.values()]
+        plans = await self.positioning_model.position_many(briefs)
+        for plan in plans:
+            self.log.decision(self.tick, "positioning", plan.model_dump())
+            self.apply_positioning(plan)
+
+    def apply_positioning(self, plan: PositioningPlan) -> dict:
+        """Clamp a positioning plan, then reset price and quality; higher quality costs more in wages."""
+        c = self.w.companies.get(plan.company_id)
+        if c is None:
+            return {}
+        lo, hi = self.cfg.position_price_mult
+        qlo, qhi = self.cfg.position_quality
+        base = self.cfg.quality_wage_base
+        applied: dict = {"products": {}}
+        for pid, pos in sorted(plan.products.items()):
+            if pid not in c.product_ids:
+                continue
+            p = self.w.products[pid]
+            ref = self.w.ref_prices[p.category]
+            price = max(1, int(round(ref * max(lo, min(hi, pos.price_mult)))))
+            quality = round(max(qlo, min(qhi, pos.quality)), 4)
+            for pr in self.w.producers.values():
+                if pr.product_id == pid:
+                    pr.wage = max(1, int(round(pr.wage * (base + quality) / (base + p.quality_mean))))
+            applied["products"][pid] = {"price": [p.price, price], "quality": [p.quality_mean, quality]}
+            p.price = p.base_price = price
+            p.quality_mean = quality
+        if plan.refund_pct is not None:
+            applied["refund_pct"] = [c.refund_pct, plan.refund_pct]
+            c.refund_pct = plan.refund_pct
+        if plan.marketing_spend is not None:
+            spend = max(0, min(plan.marketing_spend, self.w.ledger.balance(c.account) // 10))
+            applied["marketing_spend"] = [c.marketing_spend, spend]
+            c.marketing_spend = spend
+        self.log.event(self.tick, "positioning", company=c.id, source=plan.source, statement=plan.statement,
+                       applied=applied)
+        return applied
+
     def _grow_needs(self) -> None:
         for b in self.w.buyers.values():
             for cat, rate in b.need_rates.items():
@@ -552,6 +622,8 @@ class Simulation:
 
     async def step(self) -> dict:
         t = self.tick
+        if t == 0 and self.positioning_model is not None:
+            await self._positioning_phase()
         self._apply_shocks()
         for p in self.w.products.values():
             p.sales_tick = 0
@@ -608,6 +680,8 @@ class Simulation:
                 "profit": self.revenue[c.id] - self.costs[c.id],
                 "refund_pct": c.refund_pct,
                 "products": {pid: {"price": self.w.products[pid].price,
+                                   "category": self.w.products[pid].category,
+                                   "quality": self.w.products[pid].quality_mean,
                                    "rating": round(self.w.products[pid].rating or 0, 3),
                                    "ratings": self.w.products[pid].rating_count,
                                    "sold": sum(self.sales_hist[pid]),

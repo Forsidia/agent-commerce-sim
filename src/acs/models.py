@@ -226,6 +226,54 @@ class SellerAction(BaseModel):
     marketing_spend: int | None = None  # cents per tick
     reason: str = ""
     source: str = "rule"
+    latency_ms: float | None = None
+
+
+class CompetitorProduct(BaseModel):
+    company_id: str
+    company_name: str
+    price: int
+
+
+class ProductBrief(BaseModel):
+    product_id: str
+    category: str
+    ref_price: int  # category reference price (cents)
+    price: int
+    quality_mean: float
+    capacity_per_tick: int  # units, summed over this product's producers
+    wage_per_tick: int  # cents, summed over this product's producers
+    need_growth: float  # average buyer need growth per tick in this category
+    competitors: list[CompetitorProduct]
+
+
+class CompanyBrief(BaseModel):
+    """What a seller sees before tick 0, when it positions its product line."""
+
+    company_id: str
+    name: str
+    cash: int
+    products: list[ProductBrief]
+    buyers_by_tier: dict[str, int]
+    median_buyer_cash: int
+    price_mult_range: tuple[float, float]  # allowed price as a multiple of ref_price
+    quality_range: tuple[float, float]
+    quality_wage_base: float  # wage scales with (quality_wage_base + quality)
+
+
+class ProductPosition(BaseModel):
+    price_mult: float  # x category reference price
+    quality: float  # target quality mean, 0..1
+
+
+class PositioningPlan(BaseModel):
+    company_id: str
+    products: dict[str, ProductPosition] = Field(default_factory=dict)
+    refund_pct: Literal[0, 50, 100] | None = None
+    marketing_spend: int | None = None  # cents per tick
+    statement: str = ""  # one-line positioning rationale, logged for analysis
+    source: str = "scenario"
+    latency_ms: float | None = None
 
 
 class Shock(BaseModel):

@@ -9,7 +9,9 @@ from pathlib import Path
 from acs.models import (
     BuyerDecision,
     BuyerRequest,
+    CompanyBrief,
     CompanyDashboard,
+    PositioningPlan,
     SellerAction,
     TriggerReport,
 )
@@ -71,3 +73,13 @@ class ReplaySeller:
         self, dashboards: list[CompanyDashboard], reports: list[TriggerReport]
     ) -> list[SellerAction]:
         return [SellerAction(**self.record.get("seller", d.tick, d.company_id)) for d in dashboards]
+
+
+class ReplayPositioning:
+    name = "replay"
+
+    def __init__(self, record: DecisionRecord):
+        self.record = record
+
+    async def position_many(self, briefs: list[CompanyBrief]) -> list[PositioningPlan]:
+        return [PositioningPlan(**self.record.get("positioning", 0, b.company_id)) for b in briefs]

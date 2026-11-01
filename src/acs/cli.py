@@ -1,4 +1,4 @@
-"""Command line: ``acs run`` and ``acs replay``."""
+"""Command line: ``acs run``, ``acs replay`` and ``acs serve``."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 from acs.config import Settings, SimConfig
-from acs.decisions.replay import DecisionRecord, ReplayBuyer, ReplaySeller, ReplayTriggers
+from acs.decisions.replay import DecisionRecord, ReplayBuyer, ReplayPositioning, ReplaySeller, ReplayTriggers
 from acs.decisions.system_one import FakeSystemOneClient, OllamaSystemOneClient, SystemOneBuyer
 from acs.decisions.utility import UtilityBuyer
 from acs.engine import Simulation
@@ -27,19 +27,38 @@ def _buyer_model(kind: str, settings: Settings):
                           margin_min=settings.s1_margin_min)
 
 
+def _llm_seller(settings: Settings):
+    from acs.decisions.llm import LLMSeller, missing_api_key
+
+    if var := missing_api_key(settings.seller_model):
+        sys.exit(f"--sellers llm with {settings.seller_model} needs {var} exported in your shell")
+    try:
+        return LLMSeller(settings.seller_model, concurrency=settings.llm_concurrency, timeout_s=settings.llm_timeout_s)
+    except ImportError:
+        sys.exit("--sellers llm needs the llm extra: uv sync --extra llm")
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     settings = Settings.from_env()
     cfg = SimConfig(seed=args.seed, ticks=args.ticks, seller_trigger_every=settings.seller_trigger_every)
-    out = Path(args.out) / f"seed{args.seed}_{args.buyers}"
+    name = f"seed{args.seed}_{args.buyers}" + ("_llm-sellers" if args.sellers == "llm" else "")
+    out = Path(args.out) / name
     log = RunLog(out)
     buyer_model = _buyer_model(args.buyers, settings)
+    llm = _llm_seller(settings) if args.sellers == "llm" else None
     sim = Simulation(build_world(cfg), cfg, buyer_model=buyer_model, log=log,
+                     seller_model=llm, positioning_model=None if args.no_positioning else llm,
                      shocks=[] if args.no_shocks else default_shocks())
+    meta = {"seed": args.seed, "ticks": args.ticks, "buyers": args.buyers, "sellers": args.sellers,
+            "seller_model": settings.seller_model if llm else None, "sim": cfg.model_dump()}
+    log.start(meta)
     summary = asyncio.run(sim.run_async())
     if isinstance(buyer_model, SystemOneBuyer):
         summary["system1"] = {"model": buyer_model.client.model, "calls": buyer_model.calls,
                               "cache_hits": buyer_model.cache_hits, "errors": buyer_model.errors}
-    log.write({"seed": args.seed, "ticks": args.ticks, "buyers": args.buyers, "sim": cfg.model_dump()}, summary)
+    if llm:
+        summary["llm_sellers"] = llm.stats()
+    log.write(meta, summary)
     _print(summary, out)
     return 0
 
@@ -51,8 +70,9 @@ def cmd_replay(args: argparse.Namespace) -> int:
     record = DecisionRecord(run_dir / "decisions.jsonl")
     shocks = [Shock(**json.loads(line)) for line in (run_dir / "shocks.jsonl").read_text().splitlines() if line]
     log = RunLog()
+    positioning = ReplayPositioning(record) if record.counts.get("positioning") else None
     sim = Simulation(build_world(cfg), cfg, buyer_model=ReplayBuyer(record), trigger_detector=ReplayTriggers(record),
-                     seller_model=ReplaySeller(record), shocks=shocks, log=log)
+                     seller_model=ReplaySeller(record), positioning_model=positioning, shocks=shocks, log=log)
     summary = sim.run()
     original = (run_dir / "events.jsonl").read_text().splitlines()
     identical = original == log.events
@@ -66,6 +86,13 @@ def cmd_replay(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_serve(args: argparse.Namespace) -> int:
+    from acs.web.server import serve
+
+    serve(Path(args.runs), args.port)
+    return 0
+
+
 def _print(summary: dict, out: Path | None) -> None:
     t = summary["totals"]
     print(f"ticks={summary['ticks']} primary_sales={t.get('sales_primary', 0)} "
@@ -75,8 +102,9 @@ def _print(summary: dict, out: Path | None) -> None:
     for cid, c in summary["companies"].items():
         print(f"  {cid} {c['name']:<18} revenue=${c['revenue'] / 100:>10,.2f} "
               f"profit=${c['profit'] / 100:>10,.2f} refund={c['refund_pct']}%")
-    if "system1" in summary:
-        print(f"system1: {summary['system1']}")
+    for key in ("system1", "llm_sellers"):
+        if key in summary:
+            print(f"{key}: {summary[key]}")
     if out:
         print(f"logs: {out}/")
 
@@ -89,12 +117,19 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--ticks", type=int, default=100)
     r.add_argument("--buyers", choices=["utility", "fake-s1", "s1"], default="utility",
                    help="utility baseline, offline fake System 1, or Ollama System 1 (ACS_S1_MODEL)")
+    r.add_argument("--sellers", choices=["rule", "llm"], default="rule",
+                   help="rule baseline, or a hosted LLM (ACS_SELLER_MODEL) for positioning and slow decisions")
+    r.add_argument("--no-positioning", action="store_true", help="with --sellers llm: keep the scenario's prices")
     r.add_argument("--no-shocks", action="store_true", help="disable the scenario's scripted shocks")
     r.add_argument("--out", default="runs")
     r.set_defaults(func=cmd_run)
     p = sub.add_parser("replay", help="re-run a recorded run without model calls and verify the event log")
     p.add_argument("run_dir")
     p.set_defaults(func=cmd_replay)
+    s = sub.add_parser("serve", help="web viewer: a supermarket view of recorded runs")
+    s.add_argument("--runs", default="runs")
+    s.add_argument("--port", type=int, default=8765)
+    s.set_defaults(func=cmd_serve)
     args = ap.parse_args(argv)
     return args.func(args)
 
