@@ -575,7 +575,7 @@ function runLabel(r) {
     + d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   const sellers = r.sellers === "llm" ? `LLM sellers${r.seller_model ? " (" + r.seller_model.split(":").pop() + ")" : ""}` : "rule sellers";
   const status = r.status === "live" ? "● live" : r.status === "stopped" ? `stopped at day ${r.done}` : `${r.ticks} days`;
-  return `${when} · ${sellers} · ${r.buyers} buyers · seed ${r.seed} · ${status}`;
+  return `${when} · ${sellers} · ${r.buyers === "utility" ? "rule" : r.buyers} buyers · seed ${r.seed} · ${status}`;
 }
 let knownRuns = null, runsSig = "";
 function fillRuns(runs) {

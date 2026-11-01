@@ -10,47 +10,54 @@ It runs at three levels. Each level needs a bit more set up:
 
 | Mode | Buyers | Sellers | Needs |
 |---|---|---|---|
-| Offline | utility baseline or fake System 1 | rules | nothing |
-| API key | utility baseline | Claude Haiku or OpenAI (`--sellers llm`) | an API key, no GPU |
+| Offline | rule | rule | nothing |
+| API key | rule | Claude Haiku or OpenAI (`--sellers llm`) | an API key, no GPU |
 | Full | Ollama decision model (`--buyers s1`) | LLM | GPU with Ollama ≥ 0.35, plus an API key |
 
 ## Quick start
 
 Requires [uv](https://docs.astral.sh/uv/), which installs Python 3.12+ itself if
-needed. Everything goes through `./sim.sh`. It installs dependencies on first
-use, starts the 3D viewer in the background, opens it in your browser, and runs
-the simulation.
+needed. Everything goes through `./sim.sh`, which installs dependencies on first
+use.
 
 ```bash
 git clone https://github.com/Forsidia/agent-commerce-sim.git
 cd agent-commerce-sim
 
-./sim.sh                                # run the sim and watch it (no API key, about 4 s)
+./sim.sh                                   # start the 3D viewer and open it in the browser
+./sim.sh run                               # run the sim: rule sellers, rule buyers (no key, about 4 s)
 
-export ANTHROPIC_API_KEY=...            # from your shell, never from .env
-./sim.sh llm                            # same, with Claude Haiku sellers
+export ANTHROPIC_API_KEY=...               # from your shell, never from .env
+./sim.sh run --sellers llm                 # Claude Haiku sellers
+```
+
+The models are chosen with two flags:
+
+| Flag | `rule` (default) | Model option |
+|---|---|---|
+| `--sellers` | rule-based pricing, refunds and ads | `llm`: Claude Haiku with `ANTHROPIC_API_KEY`, or `ACS_SELLER_MODEL=openai:gpt-5-mini` with `OPENAI_API_KEY` |
+| `--buyers` | utility rule | `s1`: the local System 1 decision model via Ollama (GPU workstation). Buyers never use an LLM |
+
+```bash
+./sim.sh run                                # rule sellers, rule buyers
+./sim.sh run --sellers llm                  # LLM sellers, rule buyers
+./sim.sh run --buyers s1                    # rule sellers, System 1 buyers
+./sim.sh run --sellers llm --buyers s1      # full setup
+./sim.sh run --ticks 50 --seed 7            # other length and seed
+./sim.sh run --no-shocks                    # drop the scripted supply cut at day 50
+./sim.sh run --sellers llm --no-positioning # LLM for slow decisions only, keep the scenario's prices
+./sim.sh run --buyers fake-s1               # offline stand-in for System 1 (tests the gate and fallback)
 ```
 
 | Command | What it does |
 |---|---|
-| `./sim.sh` or `./sim.sh run` | rule sellers, utility buyers, 100 days, seed 42 |
-| `./sim.sh llm` | LLM sellers. Uses `ANTHROPIC_API_KEY`, or set `ACS_SELLER_MODEL=openai:gpt-5-mini` and `OPENAI_API_KEY` |
-| `./sim.sh s1` | System 1 buyers from Ollama, plus LLM sellers (GPU workstation) |
-| `./sim.sh view` | only start and open the viewer |
+| `./sim.sh` | start the viewer in the background and open it |
+| `./sim.sh run [flags]` | run the simulation. Also starts the viewer if needed, so the run appears there |
 | `./sim.sh stop` | stop the background viewer |
 | `./sim.sh runs` | list recorded runs, newest first |
 | `./sim.sh replay runs/<folder>` | re-run without model calls and check the result is identical |
 | `./sim.sh test` | 20 offline tests, no network or GPU |
-| `./sim.sh setup` | install or update dependencies |
-
-Options after `run`, `llm` or `s1` are passed to the simulation:
-
-```bash
-./sim.sh run --ticks 50 --seed 7       # other length and seed
-./sim.sh run --no-shocks               # drop the scripted supply cut at day 50
-./sim.sh run --buyers fake-s1          # offline stand-in for System 1 (tests the gate and fallback)
-./sim.sh llm --no-positioning          # LLM for slow decisions only; keep the scenario's prices and quality
-```
+| `./sim.sh setup` / `./sim.sh help` | install dependencies / show all options |
 
 Every run is saved to its own folder, `runs/<date-time>_seed<N>_<buyers>[_llm-sellers]/`,
 so re-running never overwrites an earlier run.
@@ -82,19 +89,18 @@ and shocks. The LLM is called only for the companies it flags.
 
 ```bash
 ollama pull tev1:4b                     # Ollama >= 0.35; called via POST /v1/systemone
-./sim.sh s1 --ticks 10                  # smoke test first
-./sim.sh s1                             # everything
+./sim.sh run --buyers s1 --ticks 10                  # smoke test first
+./sim.sh run --buyers s1 --sellers llm               # everything
 ```
 
 Other decision models are `nimble-v3:9b-q4_K_M` (non-commercial licence) and
 `d1:3b`. Set the model with `ACS_S1_MODEL`. If the model is unsure, gives an
-invalid answer or errors, the buyer falls back to the utility baseline. To run
-System 1 buyers with rule sellers, use `./sim.sh run --buyers s1`.
+invalid answer or errors, the buyer falls back to the utility baseline.
 
 ## The 3D market viewer
 
-`./sim.sh` starts the viewer at http://127.0.0.1:8765 and leaves it running, so
-you can start more runs while it's open.
+`./sim.sh` starts the viewer at http://127.0.0.1:8765 and leaves it running in the
+background. Every `./sim.sh run` appears in it.
 - **Choosing a run:** the dropdown lists every run, newest first, labelled with
   its start time, sellers, buyers, seed and status (`● live`, `100 days`, or
   `stopped at day N`).
@@ -153,7 +159,7 @@ are appended every tick, which is how the viewer follows live runs.
 | `summary.json` | Totals, failed transactions, profit per company, Gini, LLM token usage. Written last; a run without it is still going |
 
 ```bash
-./sim.sh replay runs/20261101-140612_seed42_utility_llm-sellers   # no model calls; checks the events are identical
+./sim.sh replay runs/20261101-140612_seed42_rule_llm-sellers   # no model calls; checks the events are identical
 ```
 
 Model runs are not deterministic: Haiku does not accept `temperature`. They are

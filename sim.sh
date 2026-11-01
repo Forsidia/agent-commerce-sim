@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # One entry point for the simulation and the 3D viewer.
-#   ./sim.sh            run the sim and watch it (rule sellers, no API key needed)
-#   ./sim.sh llm        same, with LLM sellers (needs ANTHROPIC_API_KEY or OPENAI_API_KEY)
-#   ./sim.sh help       everything else
+#   ./sim.sh                                  start the viewer
+#   ./sim.sh run                              run the sim (rule sellers, rule buyers)
+#   ./sim.sh run --sellers llm --buyers s1    choose the decision models
+#   ./sim.sh help                             everything else
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -24,14 +25,13 @@ ensure_env() {
   fi
 }
 
-acs() { .venv/bin/acs "$@"; }
-
 viewer_up() { curl -fsS -o /dev/null --max-time 1 "${URL}api/runs" 2>/dev/null; }
 
+# start_viewer [open]: start the viewer if needed; open the browser only when asked
 start_viewer() {
   mkdir -p "$RUNS"
   if viewer_up; then
-    say "viewer already running at ${URL}"
+    say "viewer running at ${URL}"
   else
     say "starting viewer at ${URL} (log: ${LOG_FILE})"
     nohup .venv/bin/acs serve --runs "$RUNS" --port "$PORT" >"$LOG_FILE" 2>&1 &
@@ -39,7 +39,7 @@ start_viewer() {
     for _ in $(seq 1 50); do viewer_up && break; sleep 0.1; done
     viewer_up || die "viewer did not start, see ${LOG_FILE}"
   fi
-  [[ "${ACS_NO_BROWSER:-}" == "1" ]] || open_browser
+  if [[ "${1:-}" == "open" && "${ACS_NO_BROWSER:-}" != "1" ]]; then open_browser; fi
 }
 
 open_browser() {
@@ -57,7 +57,14 @@ stop_viewer() {
   rm -f "$PID_FILE"
 }
 
+# fail early when the run asks for LLM sellers but the provider key is not exported
 need_key() {
+  local prev="" llm=0 a
+  for a in "$@"; do
+    if [[ "$a" == "--sellers=llm" || ( "$prev" == "--sellers" && "$a" == "llm" ) ]]; then llm=1; fi
+    prev="$a"
+  done
+  [[ $llm == 1 ]] || return 0
   local model="${ACS_SELLER_MODEL:-anthropic:claude-haiku-5-5}"
   case "$model" in
     anthropic:*) [[ -n "${ANTHROPIC_API_KEY:-}" ]] || die "export ANTHROPIC_API_KEY=... first (model: $model)" ;;
@@ -66,44 +73,45 @@ need_key() {
 }
 
 usage() {
-  cat <<EOF
+  cat <<'EOF'
 Usage: ./sim.sh [command] [options]
 
-  (none) | run    start the viewer, open the browser, run the sim (rule sellers, no key)
-  llm             same with LLM sellers (export ANTHROPIC_API_KEY, or set
-                  ACS_SELLER_MODEL=openai:gpt-5-mini and export OPENAI_API_KEY)
-  s1              same with System 1 buyers (needs Ollama + tev1:4b) and LLM sellers
-  view            only start the viewer and open the browser
+  (none) | view   start the 3D viewer in the background and open it in the browser
+  run [options]   run the simulation (starts the viewer too if it is not running)
   stop            stop the background viewer
-  runs            list recorded runs
+  runs            list recorded runs, newest first
   replay <dir>    re-run a recorded run without model calls and verify it
   test            run the test suite
   setup           install / update dependencies
 
-Options after run/llm/s1 go to the simulation, e.g.
-  ./sim.sh run --ticks 50 --seed 7 --no-shocks
-  ./sim.sh llm --no-positioning
+Run options:
+  --sellers rule|llm   rule (default), or a hosted LLM: Claude Haiku with ANTHROPIC_API_KEY,
+                       or ACS_SELLER_MODEL=openai:gpt-5-mini with OPENAI_API_KEY
+  --buyers rule|s1     rule (default), or the local System 1 decision model (Ollama + tev1:4b)
+  --ticks N  --seed N  --no-shocks  --no-positioning   (all: .venv/bin/acs run --help)
+
+Examples:
+  ./sim.sh                                 # open the viewer
+  ./sim.sh run                             # rule sellers, rule buyers
+  ./sim.sh run --sellers llm               # Haiku sellers, rule buyers
+  ./sim.sh run --sellers llm --buyers s1   # full setup (GPU workstation)
 
 Env: ACS_VIEWER_PORT (8765), ACS_RUNS_DIR (runs), ACS_NO_BROWSER=1
 EOF
 }
 
-cmd="${1:-run}"
+cmd="${1:-view}"
 [[ $# -gt 0 ]] && shift
 case "$cmd" in
-  run)    ensure_env; start_viewer; acs run --out "$RUNS" "$@" ;;
-  llm)    ensure_env; need_key; start_viewer; acs run --out "$RUNS" --sellers llm "$@" ;;
-  s1)     ensure_env; need_key; start_viewer; acs run --out "$RUNS" --buyers s1 --sellers llm "$@" ;;
-  view)   ensure_env; start_viewer ;;
+  view)   ensure_env; start_viewer open ;;
+  run)    ensure_env; need_key "$@"; start_viewer
+          .venv/bin/acs run --out "$RUNS" "$@"
+          say "watch it at ${URL} (./sim.sh to open the viewer, ./sim.sh stop to stop it)" ;;
   stop)   stop_viewer ;;
   runs)   ls -1t "$RUNS" 2>/dev/null | grep -v '^\.' || say "no runs yet" ;;
-  replay) ensure_env; [[ $# -ge 1 ]] || die "usage: ./sim.sh replay runs/<run-folder>"; acs replay "$@" ;;
+  replay) ensure_env; [[ $# -ge 1 ]] || die "usage: ./sim.sh replay runs/<run-folder>"; .venv/bin/acs replay "$@" ;;
   test)   ensure_env; .venv/bin/pytest -q "$@" ;;
   setup)  command -v uv >/dev/null || die "uv is not installed"; uv sync --extra dev ;;
   help|-h|--help) usage ;;
   *)      usage; exit 1 ;;
 esac
-
-if [[ "$cmd" =~ ^(run|llm|s1)$ ]]; then
-  say "run saved; the viewer keeps running at ${URL} (./sim.sh stop to stop it)"
-fi

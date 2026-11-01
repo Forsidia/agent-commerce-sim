@@ -20,7 +20,7 @@ from acs.scenarios.example import build_world, default_shocks
 
 
 def _buyer_model(kind: str, settings: Settings):
-    if kind == "utility":
+    if kind == "rule":
         return UtilityBuyer()
     client = (FakeSystemOneClient() if kind == "fake-s1"
               else OllamaSystemOneClient(settings.ollama_base_url, settings.s1_model, settings.s1_timeout_s))
@@ -41,6 +41,8 @@ def _llm_seller(settings: Settings):
 
 def cmd_run(args: argparse.Namespace) -> int:
     settings = Settings.from_env()
+    if args.buyers == "utility":
+        args.buyers = "rule"
     cfg = SimConfig(seed=args.seed, ticks=args.ticks, seller_trigger_every=settings.seller_trigger_every)
     # every run gets its own folder, so a re-run never overwrites an earlier one
     name = args.name or (f"{time.strftime('%Y%m%d-%H%M%S')}_seed{args.seed}_{args.buyers}"
@@ -122,8 +124,9 @@ def main(argv: list[str] | None = None) -> int:
     r = sub.add_parser("run", help="run the example market")
     r.add_argument("--seed", type=int, default=42)
     r.add_argument("--ticks", type=int, default=100)
-    r.add_argument("--buyers", choices=["utility", "fake-s1", "s1"], default="utility",
-                   help="utility baseline, offline fake System 1, or Ollama System 1 (ACS_S1_MODEL)")
+    r.add_argument("--buyers", choices=["rule", "s1", "fake-s1", "utility"], default="rule",
+                   help="rule (utility baseline), s1 (Ollama System 1 decision model, ACS_S1_MODEL), "
+                        "or fake-s1 (offline stand-in); 'utility' is an old name for rule")
     r.add_argument("--sellers", choices=["rule", "llm"], default="rule",
                    help="rule baseline, or a hosted LLM (ACS_SELLER_MODEL) for positioning and slow decisions")
     r.add_argument("--no-positioning", action="store_true", help="with --sellers llm: keep the scenario's prices")
